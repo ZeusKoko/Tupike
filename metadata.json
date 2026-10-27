@@ -1,0 +1,6 @@
+{
+  "name": "Tupike?",
+  "description": "Smart Kenyan meal suggestions based on ingredients you already have at home. Fast, simple, and tailored for Kenyan kitchens.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
