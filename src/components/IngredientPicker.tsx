@@ -61,7 +61,7 @@ export const IngredientPicker: React.FC<IngredientPickerProps> = ({
   };
 
   return (
-    <div className="pb-36 pt-4 max-w-2xl mx-auto px-4">
+    <div className="pb-56 pt-4 max-w-2xl mx-auto px-4">
       {/* 1. Heading & explanation */}
       <div className="text-center mb-5">
         <h1 className="text-2xl sm:text-3xl font-black text-[#25671E] tracking-tight">

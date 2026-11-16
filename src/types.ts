@@ -14,6 +14,13 @@ export interface FilterOptions {
   useExpiringSoon: boolean;
 }
 
+export interface ShoppingListItem {
+  item: string;
+  quantity: string;
+  price: number;
+  isApproximate?: boolean;
+}
+
 export interface MealRecipe {
   id: string;
   name: string;
@@ -27,5 +34,16 @@ export interface MealRecipe {
   ingredients: string[];
   steps: string[];
   tip: string;
+  estimatedCost: number;
+  shoppingList: ShoppingListItem[];
   savedAt?: number;
+}
+
+export interface SuggestMealsResponse {
+  meals: MealRecipe[];
+  budgetKsh?: number | null;
+  budgetTooLow?: boolean;
+  suggestedMinBudget?: number;
+  lowestCostMeal?: MealRecipe | null;
+  friendlyBudgetMessage?: string;
 }

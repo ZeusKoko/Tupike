@@ -25,12 +25,82 @@ const ai = new GoogleGenAI({
   },
 });
 
+/**
+ * Typical Kenyan market & duka prices in KSh.
+ * IMPORTANT: This price list should be updated regularly to reflect current local market rates.
+ */
+export const PRICES: Record<string, { item: string; unit: string; price: number }> = {
+  // Vegetables & Greens
+  sukumaWiki: { item: 'Sukuma wiki (kale)', unit: '1 bunch', price: 20 },
+  spinach: { item: 'Spinach', unit: '1 bunch', price: 30 },
+  cabbage: { item: 'Cabbage', unit: '1 small head', price: 50 },
+  tomatoes: { item: 'Tomatoes (nyanya)', unit: '1 kg', price: 100 },
+  carrots: { item: 'Carrots', unit: '1 kg', price: 100 },
+  potatoes: { item: 'Potatoes (waru)', unit: '1 kg', price: 100 },
+  sweetPotatoes: { item: 'Sweet potatoes (ngwaci)', unit: '1 kg', price: 100 },
+  peas: { item: 'Green peas (minji)', unit: '1/2 kg', price: 120 },
+  greenPeppers: { item: 'Green pepper (hoho)', unit: '1 piece', price: 15 },
+  managu: { item: 'Managu', unit: '1 bunch', price: 40 },
+  terere: { item: 'Terere (amaranth)', unit: '1 bunch', price: 30 },
+  pumpkin: { item: 'Pumpkin (malenge)', unit: '1 kg', price: 80 },
+  dhania: { item: 'Coriander (dhania)', unit: '1 bunch', price: 10 },
+  garlic: { item: 'Garlic (kitunguu saumu)', unit: '1 bulb', price: 30 },
+  ginger: { item: 'Ginger (tangawizi)', unit: '1 piece', price: 20 },
+
+  // Proteins
+  eggs: { item: 'Eggs (mayai)', unit: '1 piece', price: 18 },
+  beef: { item: 'Beef (nyama)', unit: '1 kg', price: 700 },
+  mincedMeat: { item: 'Minced meat', unit: '1 kg', price: 750 },
+  chicken: { item: 'Chicken (kuku)', unit: '1 kg', price: 600 },
+  goatMeat: { item: 'Goat meat (mbuzi)', unit: '1 kg', price: 800 },
+  fishTilapia: { item: 'Tilapia fish (samaki)', unit: '1 medium whole fish', price: 350 },
+  omena: { item: 'Omena (dried sardines)', unit: '500 g (1 gorogoro tin)', price: 180 },
+  sausages: { item: 'Sausages / smokies', unit: '1 piece', price: 50 },
+  beans: { item: 'Beans (maharagwe)', unit: '1 kg', price: 200 },
+  ndengu: { item: 'Ndengu (green grams)', unit: '1 kg', price: 220 },
+  njahi: { item: 'Njahi (black beans)', unit: '1 kg', price: 240 },
+  kamande: { item: 'Kamande (lentils)', unit: '1 kg', price: 240 },
+
+  // Grains & Flour
+  rice: { item: 'Rice (mchele)', unit: '1 kg', price: 200 },
+  maizeFlour: { item: 'Maize flour (unga wa ugali)', unit: '2 kg', price: 170 },
+  wheatFlour: { item: 'Wheat flour', unit: '2 kg', price: 190 },
+  chapatiFlour: { item: 'Chapati flour (atta)', unit: '2 kg', price: 210 },
+  githeri: { item: 'Pre-boiled githeri (maize & beans)', unit: '1 kg', price: 150 },
+  muthokoi: { item: 'Muthokoi (dehulled maize)', unit: '1 kg', price: 160 },
+  spaghetti: { item: 'Spaghetti / pasta', unit: '400 g packet', price: 110 },
+  bread: { item: 'Bread (mkate)', unit: '400 g loaf', price: 65 },
+
+  // Fruit, Dairy & Roots
+  matoke: { item: 'Green bananas (matoke)', unit: '1 bunch (approx. 6 pieces)', price: 100 },
+  avocado: { item: 'Avocado (parachichi)', unit: '1 piece', price: 30 },
+  coconutMilk: { item: 'Coconut milk (tui la nazi)', unit: '250 ml', price: 80 },
+  milk: { item: 'Milk (maziwa)', unit: '500 ml packet', price: 65 },
+  lemon: { item: 'Lemon (ndimu)', unit: '1 piece', price: 15 },
+  arrowRoots: { item: 'Arrow roots (nduma)', unit: '1 kg', price: 150 },
+  cassava: { item: 'Cassava (muhogo)', unit: '1 kg', price: 100 },
+};
+
+function formatPriceListForPrompt(): string {
+  return Object.values(PRICES)
+    .map((p) => `- ${p.item}: KSh ${p.price} per ${p.unit}`)
+    .join('\n');
+}
+
 interface RecipeRequest {
   ingredients: string[];
+  budgetKsh?: number | null;
   timeLimit?: string;
   servings?: number;
   cookingSetup?: string;
   useExpiringSoon?: boolean;
+}
+
+interface ShoppingListItem {
+  item: string;
+  quantity: string;
+  price: number;
+  isApproximate?: boolean;
 }
 
 interface MealSuggestion {
@@ -45,597 +115,706 @@ interface MealSuggestion {
   ingredients: string[];
   steps: string[];
   tip: string;
+  estimatedCost: number;
+  shoppingList: ShoppingListItem[];
 }
 
-// Fallback generator for realistic, high-quality Kenyan home recipes if API key is absent or network fails
-function generateFallbackKenyanMeals(req: RecipeRequest): MealSuggestion[] {
-  const userIngredients = req.ingredients.map(i => i.toLowerCase());
-  const servings = req.servings || 4;
-  const setup = req.cookingSetup || 'One burner';
+function normalizeAndVerifyMeal(
+  rawMeal: any,
+  userIngredients: string[],
+  defaultServings: number
+): MealSuggestion {
+  const shoppingList: ShoppingListItem[] = Array.isArray(rawMeal?.shoppingList)
+    ? rawMeal.shoppingList
+        .filter((entry: any) => entry && typeof entry.item === 'string' && entry.item.trim())
+        .map((entry: any) => ({
+          item: String(entry.item).trim(),
+          quantity: String(entry.quantity || '1 portion').trim(),
+          price: Math.max(0, Math.round(Number(entry.price) || 0)),
+          isApproximate: Boolean(entry.isApproximate),
+        }))
+    : [];
 
-  const has = (key: string) => userIngredients.some(i => i.includes(key));
+  // Recompute total in code so arithmetic is always exact
+  const computedTotal = shoppingList.reduce((sum, entry) => sum + entry.price, 0);
+  const estimatedCost =
+    shoppingList.length > 0
+      ? computedTotal
+      : Math.max(0, Math.round(Number(rawMeal?.estimatedCost) || 0));
 
-  const meals: MealSuggestion[] = [];
+  const ingredientsUserHas: string[] = Array.isArray(rawMeal?.ingredientsUserHas)
+    ? rawMeal.ingredientsUserHas.map((s: any) => String(s))
+    : [];
 
-  // Recipe 1: Ugali or rice or grain based
-  if (has('sukuma') || has('spinach') || has('cabbage') || has('egg') || has('maize') || has('flour')) {
-    meals.push({
-      name: 'Ugali with Sautéed Greens & Quick Fried Eggs',
-      localName: 'Ugali, Sukuma Wiki na Mayai',
-      description: 'The beloved quintessential Kenyan comfort dinner, quick to whip up on a single burner.',
-      timeMinutes: 25,
-      servings: servings,
+  const ingredientsMissing: string[] =
+    shoppingList.length > 0
+      ? shoppingList.map((s) => `${s.item} (${s.quantity})`)
+      : Array.isArray(rawMeal?.ingredientsMissing)
+        ? rawMeal.ingredientsMissing.map((s: any) => String(s))
+        : [];
+
+  return {
+    name: String(rawMeal?.name || 'Kenyan Home Dish'),
+    localName: String(rawMeal?.localName || 'Chakula Kitamu'),
+    description: String(rawMeal?.description || 'Simple, wholesome Kenyan home cooking.'),
+    timeMinutes: Math.max(5, Math.round(Number(rawMeal?.timeMinutes) || 30)),
+    servings: Math.max(1, Math.round(Number(rawMeal?.servings) || defaultServings)),
+    difficulty: rawMeal?.difficulty === 'Medium' ? 'Medium' : 'Easy',
+    ingredientsUserHas: userIngredients.length === 0 ? [] : ingredientsUserHas,
+    ingredientsMissing,
+    ingredients: Array.isArray(rawMeal?.ingredients)
+      ? rawMeal.ingredients.map((s: any) => String(s))
+      : [],
+    steps: Array.isArray(rawMeal?.steps)
+      ? rawMeal.steps.map((s: any) => String(s))
+      : [],
+    tip: String(rawMeal?.tip || 'Cook on medium-low heat to keep food tender and flavorful.'),
+    estimatedCost,
+    shoppingList,
+  };
+}
+
+// Helper to build a realistic fallback shopping item respecting what the user already has
+function filterOutUserItems(
+  items: ShoppingListItem[],
+  userIngredients: string[]
+): ShoppingListItem[] {
+  if (userIngredients.length === 0) return items;
+  const lowerUser = userIngredients.map((i) => i.toLowerCase());
+  return items.filter((entry) => {
+    const itemLower = entry.item.toLowerCase();
+    return !lowerUser.some(
+      (u) =>
+        itemLower.includes(u.split('(')[0].trim()) ||
+        u.includes(itemLower.split('(')[0].trim())
+    );
+  });
+}
+
+// Fallback generator supporting Budget-only, Ingredients-only, and Combined modes
+function generateFallbackKenyanMeals(req: RecipeRequest): {
+  meals: MealSuggestion[];
+  budgetTooLow?: boolean;
+  suggestedMinBudget?: number;
+  lowestCostMeal?: MealSuggestion;
+  friendlyBudgetMessage?: string;
+} {
+  const userIngredients = Array.isArray(req.ingredients) ? req.ingredients : [];
+  const lowerUser = userIngredients.map((i) => i.toLowerCase());
+  const servings = Math.max(1, Number(req.servings) || 4);
+  const hasBudget = typeof req.budgetKsh === 'number' && req.budgetKsh > 0;
+  const budgetKsh = hasBudget ? Math.round(req.budgetKsh as number) : null;
+
+  const has = (key: string) => lowerUser.some((i) => i.includes(key));
+  const scaleFactor = Math.max(0.5, servings / 4);
+
+  const candidates: MealSuggestion[] = [];
+
+  // Candidate A: Budget-friendly classic Ugali & Sukuma Wiki (+ optional Eggs)
+  {
+    const flourQty = servings <= 2 ? '1/2 kg' : '1 kg';
+    const flourPrice = servings <= 2 ? 45 : 85;
+    const greensBunches = servings <= 2 ? 1 : 2;
+    const greensPrice = greensBunches * PRICES.sukumaWiki.price;
+    const tomatoPrice = servings <= 2 ? 25 : 40;
+    const tomatoQty = servings <= 2 ? '1/4 kg (3 tomatoes)' : '400 g (4 tomatoes)';
+
+    const rawShop = filterOutUserItems(
+      [
+        { item: 'Maize flour (unga wa ugali)', quantity: flourQty, price: flourPrice },
+        { item: 'Sukuma wiki', quantity: `${greensBunches} bunch${greensBunches > 1 ? 'es' : ''}`, price: greensPrice },
+        { item: 'Tomatoes', quantity: tomatoQty, price: tomatoPrice },
+      ],
+      userIngredients
+    );
+
+    const totalCost = rawShop.reduce((s, x) => s + x.price, 0);
+    candidates.push({
+      name: 'Ugali & Sautéed Sukuma Wiki',
+      localName: 'Ugali na Sukuma Wiki',
+      description: 'Filling, budget-smart Kenyan staple with tender sautéed kale in tomato base.',
+      timeMinutes: 20,
+      servings,
       difficulty: 'Easy',
-      ingredientsUserHas: req.ingredients.filter(i => /sukuma|spinach|cabbage|egg|maize|ugali|tomato|onion/i.test(i)),
-      ingredientsMissing: userIngredients.some(i => /maize|ugali/i.test(i)) ? [] : ['Maize flour (unga wa ugali)'],
+      ingredientsUserHas: userIngredients.filter((i) =>
+        /maize|ugali|sukuma|kale|tomato/i.test(i)
+      ),
+      ingredientsMissing: rawShop.map((s) => `${s.item} (${s.quantity})`),
       ingredients: [
-        '2 cups Maize flour (unga wa ugali)',
-        '3 cups Water',
-        '1 bunch Sukuma wiki or Spinach, finely shredded',
-        '3 Fresh eggs',
-        '1 medium Onion, diced',
-        '2 ripe Tomatoes, finely chopped',
-        '2 tbsp Vegetable oil',
-        '1 tsp Salt to taste'
+        `${flourQty} Maize flour (unga wa ugali)`,
+        `${greensBunches} bunch${greensBunches > 1 ? 'es' : ''} Sukuma wiki, finely shredded`,
+        `${tomatoQty} Tomatoes, chopped`,
+        '1 medium Onion, sliced (from home)',
+        '2 tbsp Cooking oil & salt to taste (from home)',
+        `${Math.ceil(3 * scaleFactor)} cups Water (from home)`,
       ],
       steps: [
-        'Greens: Heat 1 tbsp oil in a sufuria. Fry half the onions till translucent, add tomatoes and cook until mashed. Add greens and salt, stir fry for 5 minutes, then cover off-heat.',
-        'Eggs: In a small pan or the same pot, fry eggs sunny-side up or scramble with a pinch of salt.',
-        'Ugali: Boil water in a sufuria. Add maize flour gradually while stirring with a wooden mwiko to prevent lumps. Press against sides of the pot until firm and aromatic (around 7-10 minutes). Shape into a neat mound.',
-        'Serve hot immediately with a slice of avocado if on hand.'
+        'Heat cooking oil in a sufuria and fry onions until soft and fragrant.',
+        'Add chopped tomatoes and salt, cooking down until soft and saucy.',
+        'Toss in shredded sukuma wiki, stir for 4–5 minutes until tender yet bright green, then cover off heat.',
+        'In a clean sufuria, bring water to a rapid boil. Add maize flour steadily while stirring with a wooden mwiko until firm and smooth (8–10 minutes).',
+        'Shape ugali onto a plate and serve hot alongside the sukuma wiki.',
       ],
-      tip: 'Let your ugali steam covered on the lowest ember or burner flame for 2 minutes before serving for that authentic smoky aroma.'
-    });
-  } else {
-    meals.push({
-      name: 'Spiced Tomato Herb Rice Stew',
-      localName: 'Wali wa Nyanya na Mboga',
-      description: 'Fragrant golden rice steamed in savory tomato base with household spices.',
-      timeMinutes: 30,
-      servings: servings,
-      difficulty: 'Easy',
-      ingredientsUserHas: req.ingredients.filter(i => /rice|tomato|onion|garlic|pea|carrot/i.test(i)),
-      ingredientsMissing: userIngredients.some(i => /rice/i.test(i)) ? [] : ['Rice (mchele)'],
-      ingredients: [
-        '2 cups Long grain white rice, washed',
-        '3 large ripe Tomatoes, blended or grated',
-        '1 large Onion, sliced',
-        '3 tbsp Cooking oil',
-        '1 tsp Curry powder or Royco (optional)',
-        '1 tsp Salt',
-        '3.5 cups Water'
-      ],
-      steps: [
-        'Heat oil in a heavy-bottomed sufuria over medium heat. Fry onions until golden brown.',
-        'Add tomatoes and salt, cooking down until oil separates and creates a thick paste.',
-        'Stir in washed rice to coat with the tomato sauce for 1 minute.',
-        'Pour in water, bring to a rapid boil, then reduce heat to low and cover tightly for 15-18 minutes until tender and fluffy.'
-      ],
-      tip: 'Wash the rice until water runs clear to keep individual grains separate and non-sticky.'
+      tip: 'Shred sukuma wiki thinly so it cooks faster and goes further across every plate.',
+      estimatedCost: totalCost,
+      shoppingList: rawShop,
     });
   }
 
-  // Recipe 2: Hearty protein or legume or fish stew
-  if (has('fish') || has('tilapia')) {
-    meals.push({
-      name: 'Crispy Deep-Fried Tilapia in Tomato Coconut Stew',
-      localName: 'Samaki wa Kupaka / Wet Fry',
-      description: 'Whole or fillet Lake Victoria tilapia crisped and glazed in savory onion-tomato sauce.',
-      timeMinutes: 30,
-      servings: servings,
-      difficulty: 'Medium',
-      ingredientsUserHas: req.ingredients.filter(i => /fish|tilapia|tomato|onion|lemon/i.test(i)),
-      ingredientsMissing: [],
-      ingredients: [
-        '1 Whole fresh Tilapia (cleaned and scored) or 400g fillets',
-        '2 tbsp Lemon juice and 1 tsp salt for seasoning',
-        '3 large ripe Tomatoes, finely chopped',
-        '1 large Onion, sliced',
-        'Oil for frying',
-        '1/2 cup Coconut milk or water'
+  // Candidate B: Fried Cabbage & Eggs with Ugali or Bread
+  {
+    const eggCount = Math.min(6, Math.max(2, servings));
+    const eggPrice = eggCount * PRICES.eggs.price;
+    const rawShop = filterOutUserItems(
+      [
+        { item: 'Cabbage', quantity: '1 small head', price: PRICES.cabbage.price },
+        { item: 'Eggs', quantity: `${eggCount} pieces`, price: eggPrice },
+        { item: 'Tomatoes', quantity: '1/4 kg', price: 25 },
       ],
-      steps: [
-        'Season fish with lemon juice and salt. Let rest for 5 minutes.',
-        'Heat oil in a deep pan. Fry fish over medium-high heat until skin is golden brown and crisp (approx 5-6 mins per side). Safe check: fish flakes easily with a fork.',
-        'In a separate sufuria, sauté onions until soft, add tomatoes and simmer into a thick gravy.',
-        'Gently lower fried tilapia into the simmering gravy. Spoon sauce over the fish and simmer for 4 minutes to absorb flavors.',
-        'Serve with hot ugali and steamed kachumbari or sukuma wiki.'
-      ],
-      tip: 'Score the fish diagonally on both sides before frying—this ensures even cooking all the way to the bone.'
-    });
-  } else if (has('managu') || has('terere')) {
-    meals.push({
-      name: 'Creamy Kienyeji Traditional Greens Stew',
-      localName: 'Managu na Terere ya Maziwa',
-      description: 'Nutritious indigenous greens sautéed with onions and finished with a splash of milk or cream.',
-      timeMinutes: 20,
-      servings: servings,
-      difficulty: 'Easy',
-      ingredientsUserHas: req.ingredients.filter(i => /managu|terere|milk|tomato|onion/i.test(i)),
-      ingredientsMissing: [],
-      ingredients: [
-        '2 bunches Managu or Terere leaves (plucked and washed thoroughly)',
-        '1 large Onion, sliced',
-        '2 ripe Tomatoes, chopped',
-        '1/2 cup Fresh whole milk or mala (optional, cuts bitterness)',
-        '2 tbsp Vegetable oil',
-        '1/2 tsp Salt'
-      ],
-      steps: [
-        'Parboil leaves in a little salted water for 4-5 minutes, then drain.',
-        'Heat oil in a sufuria. Fry onions until golden brown, then add tomatoes and cook until soft.',
-        'Add the parboiled greens and stir fry for 5 minutes.',
-        'Pour in the milk or cream, turn heat to low, and let simmer gently for 3 minutes until rich and creamy.',
-        'Serve with steaming hot brown or white ugali.'
-      ],
-      tip: 'Adding a splash of whole milk or fermented mala at the end rounds out the natural earthy bitterness of managu.'
-    });
-  } else if (has('githeri')) {
-    meals.push({
-      name: 'Special Fried Githeri with Carrots & Potatoes',
-      localName: 'Githeri ya Kukaanga',
-      description: 'Kenya\'s ultimate powerhouse combo of boiled maize and beans pan-fried with sweet carrots and spices.',
-      timeMinutes: 20,
-      servings: servings,
-      difficulty: 'Easy',
-      ingredientsUserHas: req.ingredients.filter(i => /githeri|bean|maize|carrot|potato|tomato|onion/i.test(i)),
-      ingredientsMissing: [],
-      ingredients: [
-        '3 cups Boiled Githeri (maize and beans mixed)',
-        '1 large Onion, diced',
-        '2 large Tomatoes, blended',
-        '1 Carrot, diced small',
-        '1 Potato, finely cubed (optional)',
-        '2 tbsp Cooking oil',
-        '1 tsp Salt and Royco / curry powder to taste'
-      ],
-      steps: [
-        'Heat cooking oil in a sufuria. Fry onions until sweet and golden.',
-        'Add diced carrots, potatoes, and tomatoes. Cook down covered for 5 minutes until potatoes start softening.',
-        'Add the boiled githeri and salt. Stir well to coat with the rich tomato sauce.',
-        'Add 1/2 cup water, cover and simmer on low heat for 8-10 minutes so flavors seep into the grains.',
-        'Serve hot with a generous wedge of ripe avocado and hot chai.'
-      ],
-      tip: 'Slightly crush a small portion of the maize and beans with your cooking spoon to make the stew thick and rich.'
-    });
-  } else if (has('omena')) {
-    meals.push({
-      name: 'Crispy Pan-Fried Omena in Onion Tomato Gravy',
-      localName: 'Omena Fry ya Nyanya',
-      description: 'Sun-dried Lake Victoria sardines fried crisp then simmered with ripe tomatoes and onions.',
-      timeMinutes: 20,
-      servings: servings,
-      difficulty: 'Easy',
-      ingredientsUserHas: req.ingredients.filter(i => /omena|tomato|onion|lemon|chili/i.test(i)),
-      ingredientsMissing: userIngredients.some(i => /tomato/i.test(i)) ? [] : ['2 ripe tomatoes'],
-      ingredients: [
-        '2 cups Dried Omena (washed thoroughly in warm water)',
-        '2 tbsp Lemon juice or vinegar (to reduce bitterness)',
-        '2 large ripe Tomatoes, diced',
-        '1 large Onion, finely chopped',
-        '3 tbsp Cooking oil',
-        '1/2 tsp Salt',
-        'Optional green chilies (pilipili)'
-      ],
-      steps: [
-        'Clean omena in warm salted water twice to remove grit and drain thoroughly.',
-        'Heat 2 tbsp oil in a sufuria. Dry-fry the omena over medium heat until golden and crispy (approx. 5 minutes). Remove and set aside.',
-        'In the same pan, heat remaining oil, fry onions until golden, then add tomatoes and lemon juice. Cook until thick gravy forms.',
-        'Toss crispy omena back into the sauce, simmer gently for 3-4 minutes so flavors marry while keeping texture.',
-        'Serve with hot ugali or chapati.'
-      ],
-      tip: 'Washing omena in warm water with a splash of lemon or vinegar cuts bitterness and ensures tender, sweet flavor.'
-    });
-  } else if (has('beef') || has('goat') || has('meat') || has('chicken')) {
-    const meatType = has('chicken') ? 'Kuku' : has('goat') ? 'Mbuzi' : 'Nyama';
-    meals.push({
-      name: `Savory Kenyan ${has('chicken') ? 'Chicken' : 'Beef'} Wet Fry Stew`,
-      localName: `${meatType} Wet Fry with Rich Gravy`,
-      description: 'Succulent tender meat simmered with caramelized onions and thick tomato reduction.',
-      timeMinutes: 45,
-      servings: servings,
-      difficulty: 'Medium',
-      ingredientsUserHas: req.ingredients.filter(i => /beef|chicken|meat|goat|tomato|onion|potato|carrot/i.test(i)),
-      ingredientsMissing: [],
-      ingredients: [
-        `500g ${has('chicken') ? 'Chicken pieces' : 'Beef/Goat meat cut into bite-sized cubes'}`,
-        '2 large Onions, sliced',
-        '3 large ripe Tomatoes, blended or grated',
-        '2 medium Potatoes or Carrots (optional), cubed',
-        '2 tbsp Cooking oil',
-        '1 tsp Salt and 1/2 tsp black pepper',
-        '1 cup Water or meat broth'
-      ],
-      steps: [
-        `Safety check: Boil ${has('chicken') ? 'chicken until juices run completely clear (internal temp 74°C/165°F)' : 'meat in 1 cup salted water until fork tender, about 25 mins'}. Reserve remaining stock.`,
-        'In a sufuria, heat oil and brown onions deeply until rich amber brown.',
-        'Add meat pieces and sear over high heat for 3 minutes to lock in flavors.',
-        'Add tomatoes, potatoes/carrots, and reserved broth. Simmer covered for 12-15 minutes until gravy is thick and glossy.',
-        'Rest for 3 minutes, then serve hot with ugali, chapati, or steamed rice.'
-      ],
-      tip: 'Do not rush the onions—browning them gives authentic wet-fry deep savory sweetness without needing artificial bouillon cubes.'
-    });
-  } else if (has('ndengu') || has('bean') || has('njahi')) {
-    meals.push({
-      name: 'Hearty Coconut Green Grams / Beans Stew',
-      localName: 'Ndengu / Maharagwe ya Nazi',
-      description: 'Soft legumes simmered in aromatics with a rich, silky finish.',
-      timeMinutes: 30,
-      servings: servings,
-      difficulty: 'Easy',
-      ingredientsUserHas: req.ingredients.filter(i => /ndengu|bean|njahi|coconut|tomato|onion|carrot/i.test(i)),
-      ingredientsMissing: [],
-      ingredients: [
-        '2 cups Boiled ndengu (green grams) or beans',
-        '1 medium Onion, chopped',
-        '2 ripe Tomatoes, chopped',
-        '1 Carrot, grated or cubed',
-        '1/2 cup Coconut milk or water',
-        '2 tbsp Oil',
-        '1 tsp Salt and basic curry spice'
-      ],
-      steps: [
-        'Heat oil in a sufuria. Fry onions until soft and slightly golden.',
-        'Add carrots and tomatoes. Cook down covered for 4 minutes until a smooth sauce forms.',
-        'Add cooked ndengu/beans and salt. Stir to combine.',
-        'Pour in coconut milk (or water), reduce heat to low, and simmer for 8-10 minutes until thick and aromatic.',
-        'Serve alongside chapati, rice, or enjoy as a standalone soup.'
-      ],
-      tip: 'Slightly mash 2 spoonfuls of the beans or ndengu against the side of the pot to naturally thicken the stew gravy.'
-    });
-  } else {
-    meals.push({
-      name: 'Comforting Vegetable & Potato Stew',
-      localName: 'Mchuzi wa Mboga na Viazi',
-      description: 'Wholesome potato cubes and garden vegetables braised in aromatic onion-tomato broth.',
-      timeMinutes: 25,
-      servings: servings,
-      difficulty: 'Easy',
-      ingredientsUserHas: req.ingredients.filter(i => /potato|carrot|pea|cabbage|tomato|onion/i.test(i)),
-      ingredientsMissing: userIngredients.some(i => /potato/i.test(i)) ? [] : ['Potatoes (viazi)'],
-      ingredients: [
-        '4 medium Potatoes, peeled and quartered',
-        '1 cup Shredded cabbage or peas/carrots',
-        '2 large Tomatoes, chopped',
-        '1 large Onion, sliced',
-        '2 tbsp Cooking oil',
-        '1 tsp Salt',
-        '1.5 cups Water'
-      ],
-      steps: [
-        'Heat cooking oil in a sufuria. Sauté onions until fragrant.',
-        'Add tomatoes and cook until juicy and tender.',
-        'Drop in potato chunks and any veggies. Coat in the tomato sauce.',
-        'Add water and salt, bring to a boil, then cover and simmer over medium heat for 15 minutes until potatoes are easily pierced with a fork.',
-        'Serve with chapati, rice, or bread.'
-      ],
-      tip: 'Poke potatoes with a knife tip—when soft to the center, turn off flame so they retain their hearty shape.'
-    });
-  }
-
-  // Recipe 3: Matoke, Chapati, Githeri or quick breakfast/supper
-  if (has('banana') || has('matoke')) {
-    meals.push({
-      name: 'Simmered Green Banana Stew',
-      localName: 'Matoke ya Nyama au Mboga',
-      description: 'Tender plantain bananas infused with onions, tomatoes, and gentle spices.',
-      timeMinutes: 30,
-      servings: servings,
-      difficulty: 'Easy',
-      ingredientsUserHas: req.ingredients.filter(i => /matoke|banana|tomato|onion|carrot|potato/i.test(i)),
-      ingredientsMissing: [],
-      ingredients: [
-        '6-8 Green cooking bananas (matoke), peeled and soaked in salted water',
-        '2 Tomatoes, chopped',
-        '1 Onion, chopped',
-        '2 tbsp Vegetable oil',
-        '1.5 cups Water or light broth',
-        '1 tsp Salt'
-      ],
-      steps: [
-        'Rub a little oil on hands before peeling green bananas to prevent sticking sap. Cut bananas into halves.',
-        'In a sufuria, fry onions in oil until fragrant. Stir in tomatoes and cook down.',
-        'Add the drained bananas and salt. Pour in water just barely covering the matoke.',
-        'Cover and simmer on medium-low flame for 20 minutes until bananas are melt-in-the-mouth soft and broth is rich.',
-        'Serve hot with a side of greens or stew.'
-      ],
-      tip: 'Peeling matoke under running water or dipping hands in cooking oil prevents banana sap from staining your fingers.'
-    });
-  } else if (has('arrow') || has('nduma') || has('sweet potato') || has('ngwaci') || has('cassava') || has('muhogo')) {
-    meals.push({
-      name: 'Boiled & Pan-Tossed Roots with Onions',
-      localName: 'Nduma, Ngwaci na Muhogo wa Kukaanga',
-      description: 'Earthy indigenous tuber roots boiled fork-tender and pan-tossed in sweet caramelized onions.',
-      timeMinutes: 25,
-      servings: servings,
-      difficulty: 'Easy',
-      ingredientsUserHas: req.ingredients.filter(i => /arrow|nduma|sweet|potato|ngwaci|cassava|muhogo|onion/i.test(i)),
-      ingredientsMissing: [],
-      ingredients: [
-        '500g Nduma (arrow roots), Ngwaci (sweet potato), or Muhogo (cassava), peeled & chunked',
-        '1 large Onion, sliced',
-        '2 tbsp Cooking oil',
-        '1 tsp Salt',
-        '2 cups Water for boiling'
-      ],
-      steps: [
-        'Place peeled root chunks in a sufuria with salted water. Cover and boil until fork tender (15-18 mins). Drain thoroughly.',
-        'Heat 2 tbsp oil in the same pan. Sauté onions over medium flame until fragrant and golden.',
-        'Add the cooked root chunks and gently toss in the onion oil for 3-4 minutes to develop a delicate crisp crust.',
-        'Serve hot alongside Kenyan spiced milk chai or fresh avocado slices.'
-      ],
-      tip: 'Boil with a pinch of salt so the natural sweetness of nduma or ngwaci is enhanced from the inside out.'
-    });
-  } else if (has('pumpkin') || has('malenge')) {
-    meals.push({
-      name: 'Simmered Golden Pumpkin & Vegetable Stew',
-      localName: 'Malenge ya Kukaanga na Nyanya',
-      description: 'Sweet, velvety pumpkin wedges braised with ripe tomatoes and garden onions.',
-      timeMinutes: 20,
-      servings: servings,
-      difficulty: 'Easy',
-      ingredientsUserHas: req.ingredients.filter(i => /pumpkin|malenge|tomato|onion|carrot/i.test(i)),
-      ingredientsMissing: [],
-      ingredients: [
-        '500g Pumpkin (malenge), peeled and cut into 1-inch cubes',
-        '2 ripe Tomatoes, diced',
-        '1 Onion, chopped',
-        '2 tbsp Oil',
-        '1/2 tsp Salt and black pepper',
-        '1 cup Water or coconut milk'
-      ],
-      steps: [
-        'Heat oil in a sufuria. Fry onions until soft.',
-        'Add tomatoes and cook until saucy.',
-        'Add pumpkin cubes and salt. Stir to coat with sauce.',
-        'Add water or coconut milk, cover and simmer on gentle heat for 12-15 minutes until pumpkin is tender and sauce is thick.',
-        'Serve with chapati, rice, or ugali.'
-      ],
-      tip: 'Do not stir violently once pumpkin is tender to keep the cubes beautifully intact.'
-    });
-  } else if (has('chapati') || has('wheat')) {
-    meals.push({
-      name: 'Layered Soft Kenyan Chapatis',
-      localName: 'Chapati za Ngozi Laini',
-      description: 'Golden, flaky flatbreads rolled with oil layers, made in a simple tawa or frying pan.',
-      timeMinutes: 40,
-      servings: servings,
-      difficulty: 'Medium',
-      ingredientsUserHas: req.ingredients.filter(i => /chapati|wheat|flour|oil|salt/i.test(i)),
-      ingredientsMissing: [],
-      ingredients: [
-        '3 cups All-purpose or chapati wheat flour',
-        '1 tsp Salt',
-        '1 tbsp Sugar (optional for color)',
-        '3 tbsp Warm oil + extra for brushing and frying',
-        '1 to 1.25 cups Warm water'
-      ],
-      steps: [
-        'In a bowl, mix flour, salt, and warm oil. Gradually add warm water while kneading until a soft, non-sticky dough forms (5-7 mins).',
-        'Cover dough with a damp cloth and rest for 15-20 minutes.',
-        'Divide into balls, roll flat, brush with oil, cut a slit and roll into a cone, then press down to create flaky layers.',
-        'Roll each into a circle. Dry fry on a medium-hot pan until bubbles appear, brush with oil on both sides, and toast until golden spots appear.',
-        'Stack in a covered hotpot to stay extra soft.'
-      ],
-      tip: 'Resting the dough for at least 15 minutes relaxes gluten so chapatis stay soft until the next morning.'
-    });
-  } else {
-    meals.push({
-      name: 'Fried Cabbage & Carrot Stir-Fry with Eggs',
-      localName: 'Kabeji ya Kukaanga na Mayai',
-      description: 'Crisp, sweet shredded cabbage quickly tossed with warm onions and fluffy eggs.',
+      userIngredients
+    );
+    const totalCost = rawShop.reduce((s, x) => s + x.price, 0);
+    candidates.push({
+      name: 'Fried Cabbage & Scrambled Eggs',
+      localName: 'Kabeji na Mayai',
+      description: 'Quick one-sufuria stir-fry of sweet crunchy cabbage folded with protein-rich eggs.',
       timeMinutes: 15,
-      servings: servings,
+      servings,
       difficulty: 'Easy',
-      ingredientsUserHas: req.ingredients.filter(i => /cabbage|carrot|egg|onion|tomato/i.test(i)),
-      ingredientsMissing: [],
+      ingredientsUserHas: userIngredients.filter((i) => /cabbage|egg|tomato/i.test(i)),
+      ingredientsMissing: rawShop.map((s) => `${s.item} (${s.quantity})`),
       ingredients: [
-        '1/2 head Cabbage, thinly shredded',
-        '1 Carrot, julienned',
-        '2-3 Eggs, whisked with salt',
-        '1 Onion, sliced',
-        '2 tbsp Oil',
-        'Salt and black pepper to taste'
+        '1 small head Cabbage, thinly shredded',
+        `${eggCount} Fresh eggs, whisked with salt`,
+        '2 Tomatoes, chopped',
+        '1 Onion, sliced (from home)',
+        '2 tbsp Cooking oil & salt (from home)',
       ],
       steps: [
-        'Heat 1 tbsp oil in a sufuria or pan. Scramble the eggs quickly until just set, then slide out onto a plate.',
-        'Add remaining oil, sauté onions for 2 minutes until translucent.',
-        'Toss in shredded cabbage and carrots. Stir fry on high heat for 3-4 minutes so it stays pleasantly crunchy.',
-        'Fold in the scrambled eggs and season with salt and pepper.',
-        'Serve with ugali, bread, or warm tea.'
+        'Heat 1 tbsp oil in a sufuria. Scramble the whisked eggs until fully set (no runny parts), then transfer to a plate.',
+        'Add 1 tbsp oil to the same pot and sauté onions until translucent.',
+        'Add tomatoes and cook 2 minutes, then stir in shredded cabbage and salt.',
+        'Cook on medium-high heat for 4 minutes so cabbage stays slightly crisp, fold eggs back in, and serve hot.',
       ],
-      tip: 'Do not overcook cabbage; keeping it slightly crunchy preserves both fresh sweet flavor and vibrant nutrients.'
+      tip: 'Cook eggs until firm and dry, and keep cabbage slightly crunchy so it stays flavorful and sweet.',
+      estimatedCost: totalCost,
+      shoppingList: rawShop,
     });
   }
 
-  return meals.slice(0, 3);
+  // Candidate C: Spiced Fried Githeri
+  {
+    const githeriPrice = servings <= 2 ? 75 : 150;
+    const githeriQty = servings <= 2 ? '1/2 kg' : '1 kg';
+    const rawShop = filterOutUserItems(
+      [
+        { item: 'Pre-boiled githeri (maize & beans)', quantity: githeriQty, price: githeriPrice },
+        { item: 'Tomatoes', quantity: '1/4 kg', price: 25 },
+        { item: 'Carrots', quantity: '1/4 kg (2 carrots)', price: 25 },
+      ],
+      userIngredients
+    );
+    const totalCost = rawShop.reduce((s, x) => s + x.price, 0);
+    candidates.push({
+      name: 'Fried Githeri with Carrots & Tomatoes',
+      localName: 'Githeri ya Kukaanga',
+      description: 'Hearty one-pot boiled maize and beans simmered in savory tomato-carrot gravy.',
+      timeMinutes: 20,
+      servings,
+      difficulty: 'Easy',
+      ingredientsUserHas: userIngredients.filter((i) => /githeri|bean|maize|carrot|tomato/i.test(i)),
+      ingredientsMissing: rawShop.map((s) => `${s.item} (${s.quantity})`),
+      ingredients: [
+        `${githeriQty} Pre-boiled githeri`,
+        '2 Tomatoes, diced',
+        '2 Carrots, diced small',
+        '1 Onion, diced (from home)',
+        '2 tbsp Oil, salt & curry spice (from home)',
+      ],
+      steps: [
+        'Heat oil in a sufuria and fry onions until golden.',
+        'Add carrots and tomatoes with a pinch of salt; cover and cook 4 minutes until soft.',
+        'Stir in pre-boiled githeri and 1/2 cup water.',
+        'Simmer covered for 8–10 minutes until beans are soft and stew thickens.',
+      ],
+      tip: 'Buying pre-boiled githeri from the market saves fuel and cooks in under 20 minutes.',
+      estimatedCost: totalCost,
+      shoppingList: rawShop,
+    });
+  }
+
+  // Candidate D: Ndengu (Green Grams) with Rice
+  {
+    const ricePrice = servings <= 2 ? 100 : 150;
+    const riceQty = servings <= 2 ? '1/2 kg' : '3/4 kg';
+    const ndenguPrice = servings <= 2 ? 55 : 110;
+    const ndenguQty = servings <= 2 ? '1/4 kg' : '1/2 kg';
+    const rawShop = filterOutUserItems(
+      [
+        { item: 'Rice (mchele)', quantity: riceQty, price: ricePrice },
+        { item: 'Ndengu (green grams)', quantity: ndenguQty, price: ndenguPrice },
+        { item: 'Tomatoes', quantity: '1/4 kg', price: 25 },
+      ],
+      userIngredients
+    );
+    const totalCost = rawShop.reduce((s, x) => s + x.price, 0);
+    candidates.push({
+      name: 'Steamed Rice & Savory Ndengu Stew',
+      localName: 'Wali na Ndengu',
+      description: 'Fluffy aromatic rice paired with rich, protein-packed green gram stew.',
+      timeMinutes: 40,
+      servings,
+      difficulty: 'Easy',
+      ingredientsUserHas: userIngredients.filter((i) => /rice|ndengu|green gram|tomato/i.test(i)),
+      ingredientsMissing: rawShop.map((s) => `${s.item} (${s.quantity})`),
+      ingredients: [
+        `${riceQty} Rice, rinsed`,
+        `${ndenguQty} Ndengu (green grams), boiled until soft`,
+        '2 Tomatoes, chopped',
+        '1 Onion, oil & salt (from home)',
+      ],
+      steps: [
+        'Boil ndengu in water until completely soft (around 25 mins, or use pre-boiled ndengu).',
+        'In a sufuria, fry onions until golden, add tomatoes and salt until saucy, then add ndengu and simmer 8 minutes.',
+        'In a second pot (or after setting stew aside), boil salted water with 1 tbsp oil, add rice, cover tightly and steam on low for 15 minutes.',
+        'Fluff rice with a fork and serve hot with ndengu stew.',
+      ],
+      tip: 'Mash two spoons of cooked ndengu against the sufuria wall to thicken the stew naturally.',
+      estimatedCost: totalCost,
+      shoppingList: rawShop,
+    });
+  }
+
+  // Candidate E: Beef / Chicken / Fish specific if user selected protein
+  if (has('beef') || has('goat') || has('chicken') || has('fish') || has('tilapia') || has('omena')) {
+    const isChicken = has('chicken');
+    const isFish = has('fish') || has('tilapia');
+    const isOmena = has('omena');
+    const proteinLabel = isOmena
+      ? 'Omena'
+      : isFish
+        ? 'Tilapia'
+        : isChicken
+          ? 'Chicken'
+          : 'Beef';
+    const rawShop = filterOutUserItems(
+      [
+        { item: 'Maize flour (unga wa ugali)', quantity: '1 kg', price: 85 },
+        { item: 'Tomatoes', quantity: '1/2 kg', price: 50 },
+        { item: 'Sukuma wiki', quantity: '1 bunch', price: 20 },
+      ],
+      userIngredients
+    );
+    const totalCost = rawShop.reduce((s, x) => s + x.price, 0);
+    candidates.unshift({
+      name: `${proteinLabel} Wet Fry with Ugali & Greens`,
+      localName: `${proteinLabel} Fry na Ugali`,
+      description: `Hearty Kenyan ${proteinLabel.toLowerCase()} simmered in rich tomato gravy alongside hot ugali.`,
+      timeMinutes: isOmena ? 25 : 40,
+      servings,
+      difficulty: 'Medium',
+      ingredientsUserHas: userIngredients.filter((i) =>
+        /beef|goat|chicken|fish|tilapia|omena|tomato|maize|ugali|sukuma/i.test(i)
+      ),
+      ingredientsMissing: rawShop.map((s) => `${s.item} (${s.quantity})`),
+      ingredients: [
+        `${proteinLabel} from your kitchen`,
+        '1/2 kg Tomatoes, chopped',
+        '1 kg Maize flour (unga wa ugali)',
+        '1 bunch Sukuma wiki',
+        'Onions, oil, salt & water (from home)',
+      ],
+      steps: [
+        isFish
+          ? 'Season fish with salt, fry in hot oil until golden brown on both sides and flesh flakes easily.'
+          : isOmena
+            ? 'Wash omena in warm water, drain well, and pan-fry until crisp before adding onions and tomatoes.'
+            : 'Boil or sear meat until fully cooked through with no pink inside (74°C for chicken).',
+        'Fry onions until golden, add tomatoes and simmer into a thick wet-fry sauce with the cooked protein.',
+        'Quickly sauté sukuma wiki with a pinch of salt and boil water to stir firm ugali.',
+      ],
+      tip: 'Always ensure chicken, meat, or fish is thoroughly cooked before serving.',
+      estimatedCost: totalCost,
+      shoppingList: rawShop,
+    });
+  }
+
+  // Sort by lowest cost first so budget filtering is clean
+  const sorted = [...candidates].sort((a, b) => a.estimatedCost - b.estimatedCost);
+
+  if (hasBudget && budgetKsh !== null) {
+    const withinBudget = sorted.filter((m) => m.estimatedCost <= budgetKsh);
+    if (withinBudget.length === 0) {
+      const lowest = sorted[0];
+      return {
+        meals: [],
+        budgetTooLow: true,
+        suggestedMinBudget: lowest.estimatedCost,
+        lowestCostMeal: lowest,
+        friendlyBudgetMessage: `KSh ${budgetKsh} is a bit tight for ${servings} ${servings === 1 ? 'person' : 'people'}. The cheapest balanced meal needs around KSh ${lowest.estimatedCost}.`,
+      };
+    }
+    return { meals: withinBudget.slice(0, 3), budgetTooLow: false };
+  }
+
+  return { meals: sorted.slice(0, 3), budgetTooLow: false };
 }
 
-// Route to suggest 3 meals
+const mealResponseSchema = {
+  type: Type.ARRAY,
+  items: {
+    type: Type.OBJECT,
+    properties: {
+      name: {
+        type: Type.STRING,
+        description: 'Descriptive meal name in English or common Kenyan format.',
+      },
+      localName: {
+        type: Type.STRING,
+        description: 'Swahili or local Kenyan name (e.g., Ugali na Sukuma Wiki, Wali wa Ndengu).',
+      },
+      description: {
+        type: Type.STRING,
+        description: 'One-line appetizing description of the meal.',
+      },
+      timeMinutes: {
+        type: Type.INTEGER,
+        description: 'Total cooking and prep time in minutes.',
+      },
+      servings: {
+        type: Type.INTEGER,
+        description: 'Number of people this recipe serves.',
+      },
+      difficulty: {
+        type: Type.STRING,
+        description: 'Difficulty level: Easy or Medium.',
+      },
+      ingredientsUserHas: {
+        type: Type.ARRAY,
+        items: { type: Type.STRING },
+        description: 'Items from the user\'s list used in this recipe (empty array if user selected no ingredients).',
+      },
+      ingredientsMissing: {
+        type: Type.ARRAY,
+        items: { type: Type.STRING },
+        description: 'Items the user needs to buy, if any.',
+      },
+      ingredients: {
+        type: Type.ARRAY,
+        items: { type: Type.STRING },
+        description: 'Full list of ingredients with practical Kenyan measurements.',
+      },
+      steps: {
+        type: Type.ARRAY,
+        items: { type: Type.STRING },
+        description: 'Step-by-step numbered instructions written in simple, clear English.',
+      },
+      tip: {
+        type: Type.STRING,
+        description: 'One short, practical home cook tip for best flavor, burner conservation, or food safety.',
+      },
+      estimatedCost: {
+        type: Type.INTEGER,
+        description: 'Total cost in KSh covering ONLY the items in shoppingList (0 if nothing needs to be bought).',
+      },
+      shoppingList: {
+        type: Type.ARRAY,
+        description: 'Exact list of items the user must buy (never include salt, oil, water, onions, basic spices, or ingredients the user already has).',
+        items: {
+          type: Type.OBJECT,
+          properties: {
+            item: {
+              type: Type.STRING,
+              description: 'Name of the item to buy.',
+            },
+            quantity: {
+              type: Type.STRING,
+              description: 'Portion size to buy (e.g., "1/2 kg", "1 bunch", "3 pieces").',
+            },
+            price: {
+              type: Type.INTEGER,
+              description: 'Cost in KSh for this quantity based on the provided price list.',
+            },
+            isApproximate: {
+              type: Type.BOOLEAN,
+              description: 'True only if the item was NOT on the provided price list and had to be estimated.',
+            },
+          },
+          required: ['item', 'quantity', 'price'],
+        },
+      },
+    },
+    required: [
+      'name',
+      'localName',
+      'description',
+      'timeMinutes',
+      'servings',
+      'difficulty',
+      'ingredientsUserHas',
+      'ingredientsMissing',
+      'ingredients',
+      'steps',
+      'tip',
+      'estimatedCost',
+      'shoppingList',
+    ],
+  },
+};
+
+async function callGeminiForMeals(
+  systemInstruction: string,
+  userPrompt: string
+): Promise<any[]> {
+  const generatePromise = ai.models.generateContent({
+    model: 'gemini-3.8-flash',
+    contents: userPrompt,
+    config: {
+      systemInstruction,
+      temperature: 0.5,
+      thinkingConfig: {
+        thinkingLevel: ThinkingLevel.LOW,
+      },
+      responseMimeType: 'application/json',
+      responseSchema: mealResponseSchema,
+    },
+  });
+
+  const timeoutPromise = new Promise<never>((_, reject) =>
+    setTimeout(() => reject(new Error('AI generation timeout after 25s')), 25000)
+  );
+
+  const response = await Promise.race([generatePromise, timeoutPromise]);
+  const text = response.text?.trim() || '';
+  if (!text) {
+    throw new Error('Empty response from model');
+  }
+  const parsed = JSON.parse(text);
+  return Array.isArray(parsed) ? parsed : parsed.meals || [];
+}
+
+// Route to suggest 3 meals (Ingredients only, Budget only, or Both)
 app.post('/api/suggest-meals', async (req, res) => {
   try {
     const {
       ingredients = [],
+      budgetKsh = null,
       timeLimit = 'Any time',
       servings = 4,
-      cookingSetup = 'One or two burners',
+      cookingSetup = 'One burner',
       useExpiringSoon = false,
     } = req.body as RecipeRequest;
 
-    if (!Array.isArray(ingredients) || ingredients.length === 0) {
-      return res.status(400).json({ error: 'Please provide at least one ingredient.' });
+    const cleanIngredients = Array.isArray(ingredients)
+      ? ingredients.map((i) => String(i).trim()).filter(Boolean)
+      : [];
+    const parsedBudget =
+      budgetKsh !== null && budgetKsh !== undefined && Number(budgetKsh) > 0
+        ? Math.round(Number(budgetKsh))
+        : null;
+    const hasBudget = parsedBudget !== null && parsedBudget > 0;
+
+    if (cleanIngredients.length === 0 && !hasBudget) {
+      return res.status(400).json({
+        error: 'Please select at least one ingredient or enter a budget in KSh.',
+      });
     }
 
-    const ingredientsList = ingredients.join(', ');
+    const priceTable = formatPriceListForPrompt();
+    const ingredientsList =
+      cleanIngredients.length > 0 ? cleanIngredients.join(', ') : 'None selected (shopping from scratch)';
 
-    const systemInstruction = `You are a friendly Kenyan home cook who helps people decide what to cook with what they already have.
+    const modeDescription =
+      cleanIngredients.length === 0 && hasBudget
+        ? `MODE 1 — BUDGET ONLY: The user has NO main ingredients at home (except free staples: salt, cooking oil, water, onions, basic spices). Suggest 3 realistic Kenyan meals they can cook by buying everything needed for KSh ${parsedBudget} or less.`
+        : cleanIngredients.length > 0 && !hasBudget
+          ? `MODE 2 — INGREDIENTS ONLY: Build meals mainly from the user's listed ingredients (${ingredientsList}). Each meal may have at most 2 cheap missing items from a local duka/market. Also populate shoppingList and estimatedCost for any missing items (or empty shoppingList and 0 cost if nothing needs to be bought).`
+          : `MODE 3 — INGREDIENTS + BUDGET: Build meals around the ingredients the user already has (${ingredientsList}) which cost KSh 0. Any extra items they need to buy in shoppingList must cost KSh ${parsedBudget} or less in total.`;
+
+    const budgetRules = hasBudget
+      ? `
+BUDGET & PRICING RULES (STRICT)
+1. Total cost of items to buy in shoppingList (estimatedCost) MUST NOT exceed KSh ${parsedBudget}.
+2. Replace any "at most 2 missing items" rule with "stay strictly within KSh ${parsedBudget} total". You may buy as many items as needed as long as their summed price is <= KSh ${parsedBudget}.
+3. Use ONLY the Kenyan market prices provided below. Choose smaller realistic portions (e.g. 1/2 kg, 1/4 kg, 2 pieces, 1 bunch, a handful) and calculate fractional prices proportionally so meals fit KSh ${parsedBudget}.
+4. If an item is NOT on the price list, estimate its Kenyan duka/market price carefully and set isApproximate: true.
+5. NEVER include salt, cooking oil, water, onions, basic spices, or ingredients the user already listed in shoppingList — those are already at home and cost KSh 0.`
+      : `
+MISSING ITEMS & PRICING RULES
+1. Each meal may have at most 2 missing items, and only cheap, common ones from a local duka or market. If a meal needs more, choose a different meal.
+2. Calculate estimatedCost and shoppingList for any missing items using ONLY the Kenyan market prices provided below (or mark isApproximate: true if not listed). If the user has everything needed, set shoppingList: [] and estimatedCost: 0.
+3. NEVER include salt, cooking oil, water, onions, basic spices, or ingredients the user already listed in shoppingList.`;
+
+    const systemInstruction = `You are a friendly Kenyan home cook who helps people decide what to cook with what they already have or with their budget.
 
 Suggest exactly 3 different meals the user can cook today.
 
-RULES
-1. Build every meal mainly from the ingredients the user listed. Assume they always have salt, cooking oil, water, onions and basic spices. Never count these as missing.
-2. Each meal may have at most 2 missing items, and only cheap, common ones from a local duka or market. If a meal needs more, choose a different meal.
-3. Never use a main ingredient the user did not list, unless it is one of the missing items.
-4. Make the 3 meals clearly different from each other: a different main dish, cooking method or starch. Never give three stews.
-5. Prefer real Kenyan and East African home dishes. Use a dish from the reference list when it fits. If none fits, suggest a simple home style dish the way a Kenyan family would cook it.
-6. Respect the filters. The total time must be within the time limit. Scale every quantity for the number of people eating. Use only methods that work on the cooking setup. No oven unless the user has one.
-7. If the user wants to use up items that may go bad soon, use the most perishable ones (greens, tomatoes, fish, meat, bananas) in at least two of the meals.
-8. Order the meals from best fit to least fit. Best fit means the fewest missing items and the closest match to what they have.
-9. If the ingredients are too few or don't work together, still give the best 3 honest options, and say in each description which small item would make it great.
-10. Use practical Kenyan measurements (cups, tablespoons, a handful, 1 bunch of sukuma wiki). Write steps in simple, clear English, short sentences, one action per step.
-11. Give food safety advice: meat and chicken cooked through, fish flaking easily, beans fully soft.
-12. Never suggest strange or unsafe combinations.
+${modeDescription}
+
+${budgetRules}
+
+GENERAL RULES
+1. Assume the user always has salt, cooking oil, water, onions and basic spices at home. Never count these as missing or charge them to the budget.
+2. Make the 3 meals clearly different from each other: a different main dish, cooking method or starch. Never give three stews.
+3. Prefer real Kenyan and East African home dishes. Use a dish from the reference list when it fits.
+4. Respect the filters. Total time must be within the time limit. Scale every quantity realistically for ${servings} ${servings === 1 ? 'person' : 'people'} eating. Use only methods that work on the cooking setup (no oven unless the user has one).
+5. ${cleanIngredients.length > 0 ? 'If the user wants to use up items that may go bad soon, use the most perishable ones (greens, tomatoes, fish, meat, bananas) in at least two of the meals.' : 'Keep portions realistic and filling for the number of people eating.'}
+6. Order the meals from best fit to least fit.
+7. Use practical Kenyan measurements (cups, tablespoons, bunches, 1/4 kg, 1/2 kg, pieces). Write steps in simple, clear English, short sentences, one action per step.
+8. Give food safety advice: meat and chicken cooked through, fish flaking easily, beans fully soft.
+9. Never suggest strange or unsafe combinations.
+
+KENYAN MARKET PRICE LIST (KSh)
+${priceTable}
 
 REFERENCE LIST OF KENYAN HOME DISHES
 Ugali na sukuma wiki, ugali na nyama, ugali na samaki, ugali na omena, ugali na managu or terere, githeri, muthokoi, mukimo, irio, matoke na nyama, pilau, wali wa nazi, wali na maharagwe, wali na ndengu, ndengu na chapati, maharagwe ya nazi, chapati, mandazi, mahamri, viazi karai, kima (minced meat stew), mayai ya kukaanga, kabeji na mayai, samaki wa kukaanga, mchuzi wa samaki, kuku wa kukaanga, kuku kienyeji stew, nduma or sweet potato boiled with tea, malenge stew, kachumbari.
 
-EXAMPLES OF THE STYLE (do not copy them if the user's ingredients are different)
-Ingredients: eggs, cabbage, tomatoes. Good meals: Kabeji na mayai (cabbage and egg stir fry), Mayai ya nyanya (egg and tomato stew), Omelette with kachumbari.
-Ingredients: rice, beans, coconut milk. Good meals: Wali wa nazi na maharagwe, Maharagwe ya nazi with plain rice, Beans and rice one pot.
-Ingredients: tilapia, tomatoes, maize flour. Good meals: Samaki wa kukaanga na ugali, Mchuzi wa samaki with ugali, Fried fish with kachumbari.
-
 OUTPUT
-Return strictly a valid JSON array of exactly 3 meals matching the schema. ingredientsUserHas must only contain items from the user's list. ingredientsMissing must have at most 2 items and must not include basic staples.`;
+Return strictly a valid JSON array of exactly 3 meals matching the schema.`;
 
-    const userPrompt = `I have these ingredients at home: ${ingredientsList}.
-User preferences & kitchen setup:
+    const userPrompt = `User inputs:
+- Ingredients already at home: ${ingredientsList}
+- Budget for buying ingredients: ${hasBudget ? `KSh ${parsedBudget} maximum` : 'No fixed budget specified'}
 - Time limit: ${timeLimit}
 - People eating (servings): ${servings}
 - Cooking setup: ${cookingSetup}
 - Prioritize using up items that may go bad soon: ${useExpiringSoon ? 'Yes' : 'No'}
 
-Suggest exactly 3 realistic, delicious Kenyan meals. Return ONLY a JSON array of 3 meal objects.`;
+Suggest 3 distinct, realistic, delicious Kenyan meals. Return ONLY a JSON array of 3 meal objects.`;
 
     if (!process.env.GEMINI_API_KEY) {
       console.warn('GEMINI_API_KEY not set. Using Kenyan home cooking fallback generator.');
-      const fallbackMeals = generateFallbackKenyanMeals({
-        ingredients,
+      const fallbackResult = generateFallbackKenyanMeals({
+        ingredients: cleanIngredients,
+        budgetKsh: parsedBudget,
         timeLimit,
         servings,
         cookingSetup,
         useExpiringSoon,
       });
-      return res.json({ meals: fallbackMeals });
+      return res.json({
+        ...fallbackResult,
+        budgetKsh: parsedBudget,
+      });
     }
 
-    const generatePromise = ai.models.generateContent({
-      model: 'gemini-3.8-flash',
-      contents: userPrompt,
-      config: {
-        systemInstruction,
-        temperature: 0.5,
-        thinkingConfig: {
-          thinkingLevel: ThinkingLevel.LOW,
-        },
-        responseMimeType: 'application/json',
-        responseSchema: {
-          type: Type.ARRAY,
-          items: {
-            type: Type.OBJECT,
-            properties: {
-              name: {
-                type: Type.STRING,
-                description: 'Descriptive meal name in English or common Kenyan format.',
-              },
-              localName: {
-                type: Type.STRING,
-                description: 'Swahili or local Kenyan name (e.g., Ugali na Sukuma Wiki, Wali wa Mchuzi).',
-              },
-              description: {
-                type: Type.STRING,
-                description: 'One-line appetizing description of the meal.',
-              },
-              timeMinutes: {
-                type: Type.INTEGER,
-                description: 'Total cooking and prep time in minutes.',
-              },
-              servings: {
-                type: Type.INTEGER,
-                description: 'Number of people this recipe serves.',
-              },
-              difficulty: {
-                type: Type.STRING,
-                description: 'Difficulty level: Easy or Medium.',
-              },
-              ingredientsUserHas: {
-                type: Type.ARRAY,
-                items: { type: Type.STRING },
-                description: 'Items from the user\'s list used in this recipe.',
-              },
-              ingredientsMissing: {
-                type: Type.ARRAY,
-                items: { type: Type.STRING },
-                description: 'Key extra items needed that user may not have, if any.',
-              },
-              ingredients: {
-                type: Type.ARRAY,
-                items: { type: Type.STRING },
-                description: 'Full list of ingredients with practical Kenyan measurements.',
-              },
-              steps: {
-                type: Type.ARRAY,
-                items: { type: Type.STRING },
-                description: 'Step-by-step numbered instructions written in simple, clear English.',
-              },
-              tip: {
-                type: Type.STRING,
-                description: 'One short, practical home cook tip for best flavor, burner conservation, or food safety.',
-              },
-            },
-            required: [
-              'name',
-              'localName',
-              'description',
-              'timeMinutes',
-              'servings',
-              'difficulty',
-              'ingredientsUserHas',
-              'ingredientsMissing',
-              'ingredients',
-              'steps',
-              'tip',
-            ],
-          },
-        },
-      },
+    // Attempt 1
+    const rawAttempt1 = await callGeminiForMeals(systemInstruction, userPrompt);
+    const normalized1 = rawAttempt1
+      .map((m) => normalizeAndVerifyMeal(m, cleanIngredients, servings))
+      .filter((m) => m.steps.length > 0);
+
+    if (!hasBudget) {
+      const good = normalized1.filter((m) => m.ingredientsMissing.length <= 2);
+      const meals = (good.length >= 2 ? good : normalized1).slice(0, 3);
+      if (meals.length === 0) {
+        throw new Error('No meals returned in structure');
+      }
+      return res.json({
+        meals,
+        budgetKsh: null,
+        budgetTooLow: false,
+      });
+    }
+
+    // SERVER CHECK FOR BUDGET MODE: sum shoppingList prices in code and drop any over budget
+    let validMeals = normalized1.filter((m) => m.estimatedCost <= parsedBudget!);
+    const allCandidates: MealSuggestion[] = [...normalized1];
+
+    // If fewer than 2 meals remain under budget, retry Gemini ONCE more
+    if (validMeals.length < 2) {
+      const retryPrompt = `IMPORTANT CORRECTION: Your previous suggestions exceeded the user's strict budget of KSh ${parsedBudget}.
+Try again and suggest 3 clearly different, realistic Kenyan meals for ${servings} ${servings === 1 ? 'person' : 'people'} where the sum of shoppingList prices is STRICTLY KSh ${parsedBudget} or less!
+Use affordable Kenyan staples (like ugali, sukuma wiki, cabbage, eggs, omena, githeri, beans, ndengu) and realistic small portions (1/4 kg, 1/2 kg, 1 bunch, individual eggs) from the price list.
+Ingredients already at home (cost KSh 0): ${ingredientsList}.
+Cooking setup: ${cookingSetup}, Time limit: ${timeLimit}.`;
+
+      try {
+        const rawRetry = await callGeminiForMeals(systemInstruction, retryPrompt);
+        const normalizedRetry = rawRetry
+          .map((m) => normalizeAndVerifyMeal(m, cleanIngredients, servings))
+          .filter((m) => m.steps.length > 0);
+
+        allCandidates.push(...normalizedRetry);
+        const retryValid = normalizedRetry.filter((m) => m.estimatedCost <= parsedBudget!);
+
+        const seenNames = new Set(validMeals.map((m) => m.name.toLowerCase()));
+        for (const meal of retryValid) {
+          if (!seenNames.has(meal.name.toLowerCase())) {
+            validMeals.push(meal);
+            seenNames.add(meal.name.toLowerCase());
+          }
+        }
+      } catch (retryErr) {
+        console.warn('Retry for budget compliance failed:', retryErr);
+      }
+    }
+
+    validMeals = validMeals.slice(0, 3);
+
+    // If after retry NO meal fits the budget, NEVER show an over-budget meal in `meals`.
+    // Instead return budgetTooLow with a friendly message and the lowest cost option.
+    if (validMeals.length === 0) {
+      const fallbackCheck = generateFallbackKenyanMeals({
+        ingredients: cleanIngredients,
+        budgetKsh: parsedBudget,
+        timeLimit,
+        servings,
+        cookingSetup,
+        useExpiringSoon,
+      });
+
+      if (fallbackCheck.meals.length > 0) {
+        return res.json({
+          meals: fallbackCheck.meals,
+          budgetKsh: parsedBudget,
+          budgetTooLow: false,
+        });
+      }
+
+      const sortedCandidates = [...allCandidates].sort(
+        (a, b) => a.estimatedCost - b.estimatedCost
+      );
+      const lowestAiMeal = sortedCandidates[0];
+      const lowestFallback = fallbackCheck.lowestCostMeal;
+      const lowestCostMeal =
+        lowestFallback &&
+        (!lowestAiMeal || lowestFallback.estimatedCost <= lowestAiMeal.estimatedCost)
+          ? lowestFallback
+          : lowestAiMeal;
+
+      const minBudget = lowestCostMeal?.estimatedCost || parsedBudget! + 50;
+
+      return res.json({
+        meals: [],
+        budgetKsh: parsedBudget,
+        budgetTooLow: true,
+        suggestedMinBudget: minBudget,
+        lowestCostMeal,
+        friendlyBudgetMessage: `KSh ${parsedBudget} is a little too small to buy a full meal for ${servings} ${servings === 1 ? 'person' : 'people'}. With about KSh ${minBudget}, you can make a satisfying Kenyan meal.`,
+      });
+    }
+
+    return res.json({
+      meals: validMeals,
+      budgetKsh: parsedBudget,
+      budgetTooLow: false,
     });
-
-    const timeoutPromise = new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error('AI generation timeout after 25s')), 25000)
-    );
-
-    const response = await Promise.race([generatePromise, timeoutPromise]);
-
-    const text = response.text?.trim() || '';
-    if (!text) {
-      throw new Error('Empty response from model');
-    }
-
-    const parsed = JSON.parse(text);
-    const raw = Array.isArray(parsed) ? parsed : (parsed.meals || []);
-    const good = raw.filter((m: any) =>
-      Array.isArray(m.steps) && m.steps.length > 0 &&
-      Array.isArray(m.ingredientsMissing) && m.ingredientsMissing.length <= 2
-    );
-    const meals = (good.length >= 2 ? good : raw).slice(0, 3);
-
-    if (meals.length === 0) {
-      throw new Error('No meals returned in structure');
-    }
-
-    return res.json({ meals });
   } catch (error: any) {
     console.error('Error generating meals with Gemini API:', error);
-    // Graceful fallback to guarantee the user gets realistic Kenyan suggestions
     try {
-      const fallbackMeals = generateFallbackKenyanMeals(req.body);
+      const fallbackResult = generateFallbackKenyanMeals(req.body);
       return res.json({
-        meals: fallbackMeals,
-        fallbackNote: 'Generated from Tupike local Kenyan kitchen guide while updating online connection.',
+        ...fallbackResult,
+        budgetKsh: req.body?.budgetKsh ? Math.round(Number(req.body.budgetKsh)) : null,
+        fallbackNote:
+          'Generated from Tupike local Kenyan kitchen guide while updating online connection.',
       });
-    } catch (fallbackError) {
+    } catch (_fallbackError) {
       return res.status(500).json({
-        error: 'Pole sana! We had trouble creating the recipes right now. Please tap Retry.',
+        error:
+          'Pole sana! We had trouble creating the recipes right now. Please tap Retry.',
       });
     }
   }

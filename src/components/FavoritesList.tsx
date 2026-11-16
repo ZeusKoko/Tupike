@@ -1,5 +1,5 @@
 import React from 'react';
-import { Heart, Clock, Users, Trash2, ArrowRight, ChefHat, Sparkles } from 'lucide-react';
+import { Heart, Clock, Users, Trash2, ArrowRight, ChefHat, Wallet, Info } from 'lucide-react';
 import { MealRecipe } from '../types';
 
 interface FavoritesListProps {
@@ -24,7 +24,7 @@ export const FavoritesList: React.FC<FavoritesListProps> = ({
           <span>My Favorite Recipes</span>
         </h1>
         <p className="text-xs text-stone-600 mt-1">
-          Your saved dishes ready anytime, even when you have low network.
+          Your saved dishes, prices, and shopping lists ready anytime without mobile data.
         </p>
       </div>
 
@@ -59,67 +59,90 @@ export const FavoritesList: React.FC<FavoritesListProps> = ({
       ) : (
         /* Saved Recipes Grid */
         <div className="space-y-3.5">
-          {favorites.map((recipe, idx) => (
-            <div
-              key={recipe.id || idx}
-              onClick={() => onSelectMeal(recipe)}
-              className="group bg-white rounded-2xl border-2 border-[#25671E]/15 hover:border-[#48A111] p-4 shadow-sm hover:shadow-md transition-all cursor-pointer select-none active:scale-[0.99]"
-            >
-              <div className="flex items-start justify-between gap-3">
-                <div className="flex-1">
-                  <div className="flex items-center gap-2 mb-1 flex-wrap">
-                    {recipe.localName && (
-                      <span className="text-[11px] font-extrabold text-[#25671E] bg-[#48A111]/15 px-2 py-0.5 rounded-md">
-                        {recipe.localName}
+          {favorites.map((recipe, idx) => {
+            const hasCostInfo =
+              typeof recipe.estimatedCost === 'number' ||
+              (Array.isArray(recipe.shoppingList) && recipe.shoppingList.length > 0);
+            const savedCost =
+              Array.isArray(recipe.shoppingList) && recipe.shoppingList.length > 0
+                ? recipe.shoppingList.reduce((sum, s) => sum + (Number(s.price) || 0), 0)
+                : Number(recipe.estimatedCost) || 0;
+
+            return (
+              <div
+                key={recipe.id || idx}
+                onClick={() => onSelectMeal(recipe)}
+                className="group bg-white rounded-2xl border-2 border-[#25671E]/15 hover:border-[#48A111] p-4 shadow-sm hover:shadow-md transition-all cursor-pointer select-none active:scale-[0.99]"
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex-1">
+                    <div className="flex items-center gap-2 mb-1 flex-wrap">
+                      {recipe.localName && (
+                        <span className="text-[11px] font-extrabold text-[#25671E] bg-[#48A111]/15 px-2 py-0.5 rounded-md">
+                          {recipe.localName}
+                        </span>
+                      )}
+                      <span className="text-[10px] font-bold text-stone-500 bg-[#F7F0F0] px-2 py-0.5 rounded-md">
+                        {recipe.difficulty}
                       </span>
-                    )}
-                    <span className="text-[10px] font-bold text-stone-500 bg-[#F7F0F0] px-2 py-0.5 rounded-md">
-                      {recipe.difficulty}
+                      {hasCostInfo && (
+                        <span className="inline-flex items-center gap-1 bg-[#F2B50B] text-[#25671E] text-[11px] font-black px-2 py-0.5 rounded-md tabular-nums">
+                          <Wallet size={11} className="text-[#25671E]" />
+                          <span>
+                            {savedCost === 0 ? 'KSh 0 extra' : `About KSh ${savedCost}`}
+                          </span>
+                        </span>
+                      )}
+                    </div>
+                    <h3 className="text-base font-black text-[#25671E] leading-snug group-hover:text-[#48A111] transition-colors">
+                      {recipe.name}
+                    </h3>
+                  </div>
+
+                  {/* Remove button */}
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onRemoveFavorite(recipe.id || recipe.name);
+                    }}
+                    className="p-2 text-stone-400 hover:text-red-600 rounded-xl hover:bg-red-50 transition-colors"
+                    aria-label="Remove from favorites"
+                    title="Remove from favorites"
+                  >
+                    <Trash2 size={16} />
+                  </button>
+                </div>
+
+                <p className="text-xs text-stone-600 mt-2 line-clamp-2 leading-relaxed">
+                  {recipe.description}
+                </p>
+
+                <div className="flex items-center justify-between mt-3 pt-2.5 border-t border-stone-100 text-xs font-bold text-stone-600 tabular-nums">
+                  <div className="flex items-center gap-3">
+                    <span className="flex items-center gap-1">
+                      <Clock size={13} className="text-[#48A111]" />
+                      {recipe.timeMinutes} mins
+                    </span>
+                    <span className="flex items-center gap-1">
+                      <Users size={13} className="text-[#48A111]" />
+                      {recipe.servings} servings
                     </span>
                   </div>
-                  <h3 className="text-base font-black text-[#25671E] leading-snug group-hover:text-[#48A111] transition-colors">
-                    {recipe.name}
-                  </h3>
-                </div>
 
-                {/* Remove button */}
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onRemoveFavorite(recipe.id || recipe.name);
-                  }}
-                  className="p-2 text-stone-400 hover:text-red-600 rounded-xl hover:bg-red-50 transition-colors"
-                  aria-label="Remove from favorites"
-                  title="Remove from favorites"
-                >
-                  <Trash2 size={16} />
-                </button>
-              </div>
-
-              <p className="text-xs text-stone-600 mt-2 line-clamp-2 leading-relaxed">
-                {recipe.description}
-              </p>
-
-              <div className="flex items-center justify-between mt-3 pt-2.5 border-t border-stone-100 text-xs font-bold text-stone-600">
-                <div className="flex items-center gap-3">
-                  <span className="flex items-center gap-1">
-                    <Clock size={13} className="text-[#48A111]" />
-                    {recipe.timeMinutes} mins
-                  </span>
-                  <span className="flex items-center gap-1">
-                    <Users size={13} className="text-[#48A111]" />
-                    {recipe.servings} servings
-                  </span>
-                </div>
-
-                <div className="flex items-center gap-1 text-[#25671E] group-hover:translate-x-0.5 transition-transform text-xs font-black">
-                  <span>Open Recipe</span>
-                  <ArrowRight size={13} />
+                  <div className="flex items-center gap-1 text-[#25671E] group-hover:translate-x-0.5 transition-transform text-xs font-black">
+                    <span>Open Recipe</span>
+                    <ArrowRight size={13} />
+                  </div>
                 </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
+
+          <p className="text-[11px] text-stone-600 pt-1 flex items-center gap-1.5">
+            <Info size={13} className="text-[#48A111] shrink-0" />
+            <span>Prices are estimates and can differ in your area.</span>
+          </p>
         </div>
       )}
     </div>

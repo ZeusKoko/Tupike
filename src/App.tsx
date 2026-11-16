@@ -16,13 +16,12 @@ export default function App() {
   const [currentScreen, setCurrentScreen] = useState<Screen>('home');
   const [previousScreen, setPreviousScreen] = useState<Screen>('home');
 
-  // Selected ingredients state
-  const [selectedIngredients, setSelectedIngredients] = useState<string[]>([
-    'Sukuma Wiki (Kale)',
-    'Tomatoes',
-    'Eggs',
-    'Maize Flour (Ugali)',
-  ]);
+  // Selected ingredients state (starts empty so Budget-only mode works right away)
+  const [selectedIngredients, setSelectedIngredients] = useState<string[]>([]);
+
+  // Optional Budget in KSh state
+  const [budgetKsh, setBudgetKsh] = useState<number | null>(null);
+  const [activeBudgetKsh, setActiveBudgetKsh] = useState<number | null>(null);
 
   // Filters state
   const [filters, setFilters] = useState<FilterOptions>({
@@ -32,8 +31,13 @@ export default function App() {
     useExpiringSoon: false,
   });
 
-  // Generated meals state
+  // Generated meals & budget fallback state
   const [meals, setMeals] = useState<MealRecipe[]>([]);
+  const [budgetTooLow, setBudgetTooLow] = useState<boolean>(false);
+  const [suggestedMinBudget, setSuggestedMinBudget] = useState<number | undefined>(undefined);
+  const [lowestCostMeal, setLowestCostMeal] = useState<MealRecipe | null>(null);
+  const [friendlyBudgetMessage, setFriendlyBudgetMessage] = useState<string | undefined>(undefined);
+
   const [selectedRecipe, setSelectedRecipe] = useState<MealRecipe | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
@@ -81,21 +85,41 @@ export default function App() {
     setSelectedIngredients([]);
   };
 
-  // Trigger Gemini API call to get 3 meals
-  const handleFindMeals = async () => {
-    if (selectedIngredients.length === 0) return;
+  // Trigger Gemini API call to get up to 3 meals
+  const handleFindMeals = async (overrideBudget?: number) => {
+    const effectiveBudget =
+      typeof overrideBudget === 'number' && overrideBudget > 0
+        ? overrideBudget
+        : budgetKsh;
+
+    const hasValidBudget = effectiveBudget !== null && effectiveBudget > 0;
+    if (selectedIngredients.length === 0 && !hasValidBudget) return;
+
+    if (typeof overrideBudget === 'number' && overrideBudget > 0) {
+      setBudgetKsh(overrideBudget);
+    }
 
     setIsLoading(true);
     setError(null);
+    setBudgetTooLow(false);
+    setLowestCostMeal(null);
+    setSuggestedMinBudget(undefined);
+    setFriendlyBudgetMessage(undefined);
+    setActiveBudgetKsh(hasValidBudget ? effectiveBudget : null);
     setCurrentScreen('results');
     window.scrollTo({ top: 0, behavior: 'smooth' });
 
     try {
-      const results = await fetchSuggestedMeals({
+      const result = await fetchSuggestedMeals({
         ingredients: selectedIngredients,
+        budgetKsh: hasValidBudget ? effectiveBudget : null,
         filters,
       });
-      setMeals(results);
+      setMeals(result.meals);
+      setBudgetTooLow(Boolean(result.budgetTooLow));
+      setSuggestedMinBudget(result.suggestedMinBudget);
+      setLowestCostMeal(result.lowestCostMeal || null);
+      setFriendlyBudgetMessage(result.friendlyBudgetMessage);
     } catch (err: any) {
       console.error(err);
       setError(err?.message || 'Pole sana! Could not load recipes. Please try again.');
@@ -112,9 +136,10 @@ export default function App() {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  // Toggle favorite recipe
+  // Toggle favorite recipe (saves full recipe including estimatedCost & shoppingList)
   const handleToggleFavorite = (recipe: MealRecipe) => {
-    const currentlySaved = isFavorite(recipe.id, favorites) || isFavorite(recipe.name, favorites);
+    const currentlySaved =
+      isFavorite(recipe.id, favorites) || isFavorite(recipe.name, favorites);
     let updated: MealRecipe[];
     if (currentlySaved) {
       updated = removeFavorite(recipe.id || recipe.name);
@@ -175,9 +200,11 @@ export default function App() {
             />
             <StickyIngredientBar
               selectedIngredients={selectedIngredients}
+              budgetKsh={budgetKsh}
+              onBudgetChange={setBudgetKsh}
               onRemoveIngredient={handleRemoveIngredient}
               onClearAll={handleClearAllIngredients}
-              onSubmit={handleFindMeals}
+              onSubmit={() => handleFindMeals()}
               isLoading={isLoading}
             />
           </>
@@ -191,9 +218,15 @@ export default function App() {
             onSelectMeal={handleSelectMeal}
             onToggleFavorite={handleToggleFavorite}
             isSaved={checkIsSaved}
-            onRetry={handleFindMeals}
+            onRetry={() => handleFindMeals()}
             onBackToIngredients={handleGoHome}
             selectedIngredients={selectedIngredients}
+            activeBudgetKsh={activeBudgetKsh}
+            budgetTooLow={budgetTooLow}
+            suggestedMinBudget={suggestedMinBudget}
+            lowestCostMeal={lowestCostMeal}
+            friendlyBudgetMessage={friendlyBudgetMessage}
+            onApplySuggestedBudget={(minBudget) => handleFindMeals(minBudget)}
           />
         )}
 
@@ -204,6 +237,7 @@ export default function App() {
             onToggleFavorite={handleToggleFavorite}
             isSaved={checkIsSaved(selectedRecipe.id || selectedRecipe.name)}
             userIngredients={selectedIngredients}
+            activeBudgetKsh={previousScreen === 'favorites' ? null : activeBudgetKsh}
           />
         )}
 
